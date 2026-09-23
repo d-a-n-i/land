@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Landing">
+<title>When do I land?</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <form id="f" autocomplete="off">
+    <input id="q" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="Flight (UA85) or airport (IAH)" aria-label="Flight number">
+    <button id="go" type="submit">Go</button>
+  </form>
+  <div id="route" class="route"></div>
+
+  <section id="hero">
+    <div class="label" id="heroLabel">Landing</div>
+    <div class="big" id="eta">--:--</div>
+    <div class="sub" id="etaSub">Enter a flight number</div>
+    <div class="band" id="band"></div>
+  </section>
+
+  <section class="grid">
+    <div><span class="k">To go</span><span class="v" id="dist">-</span></div>
+    <div><span class="k">Ground speed</span><span class="v" id="gs">-</span></div>
+    <div><span class="k">Altitude</span><span class="v" id="alt">-</span></div>
+    <div><span class="k">At gate</span><span class="v" id="gate">-</span></div>
+  </section>
+
+  <div id="src" class="src"></div>
+  <div id="msg" class="msg"></div>
+
+  <details>
+    <summary>How this works</summary>
+    <p>Your phone's GPS gives position and ground speed (works in airplane mode - GPS is receive-only; a window seat helps). Distance is great-circle to the destination runway area. Time left = cruise at your real ground speed (wind included), then a descent profile from ~200 km out, then a final approach leg plus typical airport vectoring time. When online, the route comes from adsbdb and live ADS-B from adsb.lol is tried; everything needed is cached so it keeps working offline.</p>
+  </details>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
