@@ -25,7 +25,7 @@ function hav(a,b,c,d){ const R=6371, x=toRad(c-a), y=toRad(d-b);
 function fmtTime(ms, tz){ try{ return new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:tz}).format(new Date(ms)); }catch(e){ return new Date(ms).toTimeString().slice(0,5); } }
 function fmtDur(min){ min=Math.max(0,Math.round(min)); const h=Math.floor(min/60), m=min%60; return h? `${h}h ${String(m).padStart(2,'0')}m` : `${m} min`; }
 function tzAbbr(tz){ try{ return new Intl.DateTimeFormat('en-US',{timeZone:tz,timeZoneName:'short'}).formatToParts(new Date()).find(p=>p.type==='timeZoneName').value; }catch(e){ return ''; } }
-function sameTz(tz){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone===tz; }catch(e){ return false; } }
+function sameTz(tz){ try{ const d=new Date(); return fmtTime(d.getTime(),tz)===fmtTime(d.getTime()); }catch(e){ return false; } }
 function routes(){ try{ return JSON.parse(localStorage.getItem(LS.routes)||'{}'); }catch(e){ return {}; } }
 function saveRoute(f,r){ const all=routes(); all[f]=r; localStorage.setItem(LS.routes, JSON.stringify(all)); }
 
