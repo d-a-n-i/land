@@ -15,16 +15,20 @@
 </head>
 <body>
 <main>
-  <form id="f" autocomplete="off">
-    <input id="q" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="Flight (UA85) or airport (IAH)" aria-label="Flight number">
-    <button id="go" type="submit">Go</button>
+  <div class="top">
+    <div id="gpsInd" class="gps"><span class="dot"></span><span id="gpsTxt">Acquiring location...</span></div>
+    <button id="destBtn" class="dest" type="button">To <b id="destCode">TLV</b> <span id="destTag"></span></button>
+  </div>
+  <form id="f" autocomplete="off" hidden>
+    <input id="q" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="Airport (IAH) or flight (UA85) - empty = auto" aria-label="Destination">
+    <button id="go" type="submit">Set</button>
   </form>
   <div id="route" class="route"></div>
 
   <section id="hero">
     <div class="label" id="heroLabel">Landing</div>
     <div class="big" id="eta">--:--</div>
-    <div class="sub" id="etaSub">Enter a flight number</div>
+    <div class="sub" id="etaSub">Waiting for GPS</div>
     <div class="band" id="band"></div>
   </section>
 
@@ -40,7 +44,7 @@
 
   <details>
     <summary>How this works</summary>
-    <p>Your phone's GPS gives position and ground speed (works in airplane mode - GPS is receive-only; a window seat helps). Distance is great-circle to the destination runway area. Time left = cruise at your real ground speed (wind included), then a descent profile from ~200 km out, then a final approach leg plus typical airport vectoring time. When online, the route comes from adsbdb and live ADS-B from adsb.lol is tried; everything needed is cached so it keeps working offline.</p>
+    <p>Nothing to type: it starts GPS on open and assumes Tel Aviv (TLV) unless your track clearly points elsewhere, then it guesses the airport ahead (tap the destination to fix it; a flight number works there too). Your phone's GPS gives position and ground speed (works in airplane mode - GPS is receive-only; a window seat helps). Distance is great-circle to the destination runway area. Time left = cruise at your real ground speed (wind included), then a descent profile from ~200 km out, then a final approach leg plus typical airport vectoring time. When online, the route comes from adsbdb and live ADS-B from adsb.lol is tried; everything needed is cached so it keeps working offline.</p>
   </details>
 </main>
 <script src="app.js"></script>
