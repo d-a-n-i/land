@@ -9,10 +9,13 @@ const HOME = 'TLV';
 const PAD = { EWR:7, JFK:7, LGA:6, LHR:8, LGW:5, FRA:6, MUC:5, IAH:5, DFW:5, ATL:6, ORD:6, LAX:5, SFO:6, CDG:6, AMS:5, IST:5, DXB:5, BOS:5, IAD:4, MIA:4, ZRH:4, VIE:4, FCO:4, MAD:4, BCN:4, ATH:3, TLV:3, AUS:3, HOU:3 };
 const TAXI = { EWR:10, JFK:12, LHR:10, FRA:9, IAH:8, DFW:10, ATL:11, ORD:11, CDG:10, AMS:10, IST:9, TLV:7 };
 const DEFAULT_PAD = 4, DEFAULT_TAXI = 7;
+// Major long-haul hubs used for the cruise-phase guess (descent switches to any large airport ahead).
+const HUBS = new Set('TLV ATH IST SAW LHR LGW MAN DUB CDG ORY AMS FRA MUC ZRH VIE BRU CPH ARN OSL HEL WAW PRG BUD OTP SOF LCA FCO MXP MAD BCN LIS DXB AUH DOH CAI AMM RUH JED BOM DEL BKK SIN HKG ICN NRT HND PEK PVG JFK EWR BOS IAD PHL ATL MIA ORD DFW IAH DEN LAX SFO SEA YYZ YUL MEX GRU EZE JNB ADD NBO SYD MEL'.split(' '));
 
 let fixCount = 0, gpsErr = null;
 let airports = null, dest = null, route = null, flight = null;
 let mode = 'auto', autoTag = '', track = null, trackFixes = [], altHist = [];
+let wasAirborne = false;
 let gps = null, lastFix = null, gsEma = null, cruiseGs = null, live = null, liveAt = 0, landedAt = null;
 
 function norm(s){ return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
@@ -78,8 +81,8 @@ function render(){
 
   const airborne = gsK!=null && gsK > 250;
   if (airborne && d > 250 && gsK > 500) cruiseGs = cruiseGs ? cruiseGs*0.98 + gsK*0.02 : gsK;
-  if (!airborne && d < 8 && gsK!=null && gsK < 110){ if(!landedAt) landedAt = now; }
-  if (airborne) landedAt = null;
+  if (airborne) { wasAirborne = true; landedAt = null; }
+  if (wasAirborne && !airborne && d < 8 && gsK!=null && gsK < 110){ if(!landedAt) landedAt = now; }
 
   if (landedAt){
     $('heroLabel').textContent = 'Landed';
@@ -87,6 +90,11 @@ function render(){
     $('etaSub').textContent = `At the gate around ${fmtTime(landedAt + taxi*60000, dest.tz)}${tzNote}`;
     $('gate').textContent = fmtTime(landedAt + taxi*60000, dest.tz); $('band').textContent = '';
     return;
+  }
+  if (!airborne && d < 30){
+    $('heroLabel').textContent = `At ${dest.code}`; $('eta').textContent = '--:--';
+    $('etaSub').textContent = 'Waiting for takeoff - destination is picked from your track once airborne';
+    $('band').textContent = ''; $('gate').textContent = '-'; return;
   }
   if (!airborne){
     const mins = minutesToGo(d, 830, dest.code) + 12; // climb-out allowance
@@ -166,17 +174,18 @@ function autoPick(){
   const dHome = hav(lastFix.lat,lastFix.lon,home.lat,home.lon);
   const offHome = angDiff(track, bearing(lastFix.lat,lastFix.lon,home.lat,home.lon));
   // Heading roughly home (routes wiggle and turn onto the approach), or already on final into TLV
-  if (offHome < 50 || dHome < 40){ setDest(home, 'auto'); return; }
   const desc = descending();
+  const homeish = dHome < 40 || offHome < 20 || (dHome < 500 && offHome < 60) || (!desc && offHome < 35);
+  if (homeish && !(desc && dHome > 400 && offHome > 15)){ setDest(home, 'auto'); return; }
   let best=null, bestScore=1e9;
   for (const [code,a] of Object.entries(airports)){
-    const big=a[5]===1; if(!big && !desc) continue;
+    const big=a[5]===1; if(desc ? false : !HUBS.has(code)) continue;
     const d=hav(lastFix.lat,lastFix.lon,a[0],a[1]); if(d<15 || d>9000) continue;
     const off=angDiff(track, bearing(lastFix.lat,lastFix.lon,a[0],a[1]));
-    const cone = desc ? 60 : 20; if(off>cone) continue;
+    const cone = desc ? 60 : 15; if(off>cone) continue; if(!desc && d<300) continue;
     const xt = d*Math.sin(toRad(off)); // km off the current track
     // descending: nearest well-aligned airport; cruising: well-aligned and far (you're not landing at a hub you're overflying at FL360)
-    const score = desc ? d*0.5 + xt*3 + (big?0:60) : xt*2 - Math.min(d,4000)*0.05;
+    const score = desc ? d*0.5 + xt*3 + (big?0:60) : xt;
     if(score<bestScore){ bestScore=score; best=code; }
   }
   if (best) setDest(ap(best), desc ? 'auto · descending' : 'auto · guess');
