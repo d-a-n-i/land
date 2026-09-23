@@ -2,14 +2,17 @@
 // When do I land? - GPS + great-circle + approach model, with online route/ADS-B enrichment.
 const $ = id => document.getElementById(id);
 const KT = 1.852; // km/h per knot
-const LS = { last: 'land.last', routes: 'land.routes' };
+const LS = { last: 'land.last', routes: 'land.routes', dest: 'land.dest' };
+const HOME = 'TLV';
 
 // Typical extra minutes for arrival routing/vectoring beyond straight-in (rough, from common STAR/holding patterns).
 const PAD = { EWR:7, JFK:7, LGA:6, LHR:8, LGW:5, FRA:6, MUC:5, IAH:5, DFW:5, ATL:6, ORD:6, LAX:5, SFO:6, CDG:6, AMS:5, IST:5, DXB:5, BOS:5, IAD:4, MIA:4, ZRH:4, VIE:4, FCO:4, MAD:4, BCN:4, ATH:3, TLV:3, AUS:3, HOU:3 };
 const TAXI = { EWR:10, JFK:12, LHR:10, FRA:9, IAH:8, DFW:10, ATL:11, ORD:11, CDG:10, AMS:10, IST:9, TLV:7 };
 const DEFAULT_PAD = 4, DEFAULT_TAXI = 7;
 
+let fixCount = 0, gpsErr = null;
 let airports = null, dest = null, route = null, flight = null;
+let mode = 'auto', autoTag = '', track = null, trackFixes = [], altHist = [];
 let gps = null, lastFix = null, gsEma = null, cruiseGs = null, live = null, liveAt = 0, landedAt = null;
 
 function norm(s){ return (s||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
@@ -46,6 +49,7 @@ function minutesToGo(d, gsKmh, code){
 }
 
 function render(){
+  updateGpsInd(); autoPick();
   if(!dest){ return; }
   const now = Date.now();
   let pos = null, srcTxt = '';
@@ -59,7 +63,7 @@ function render(){
   if (!pos){
     $('heroLabel').textContent = 'Waiting for position';
     $('eta').textContent = '--:--';
-    $('etaSub').textContent = gps ? 'Getting a GPS fix... hold the phone near a window' : 'Allow location to start';
+    $('etaSub').textContent = gps ? 'Getting a GPS fix... phone near a window helps' : 'Allow location to start';
     if (route && route.origin){ const o=ap(route.origin); if(o){ const d=hav(o.lat,o.lon,dest.lat,dest.lon);
       const block = d/830*60 + 22; $('band').textContent = `Typical airborne time ${fmtDur(block)} for ${Math.round(d)} km`; } }
     $('src').textContent = srcTxt;
@@ -108,12 +112,18 @@ function onFix(p){
   let spd = (c.speed!=null && !isNaN(c.speed)) ? c.speed : null;
   if (spd==null && lastFix && t>lastFix.t){ const dt=(t-lastFix.t)/1000; if(dt>=2) spd = hav(lastFix.lat,lastFix.lon,c.latitude,c.longitude)*1000/dt; }
   if (spd!=null){ gsEma = gsEma==null ? spd : gsEma*0.8 + spd*0.2; }
-  lastFix = {lat:c.latitude, lon:c.longitude, acc:c.accuracy||0, alt:(c.altitude!=null?c.altitude:null), t};
+  lastFix = {lat:c.latitude, lon:c.longitude, acc:c.accuracy||0, alt:(c.altitude!=null?c.altitude:null), t, hdg:(c.heading!=null&&!isNaN(c.heading)&&spd>30)?c.heading:null};
+  fixCount++;
+  trackFixes.push(lastFix); trackFixes = trackFixes.filter(f => t - f.t < 180000);
+  const old = trackFixes.find(f => t - f.t >= 45000) || trackFixes[0];
+  if (old && old!==lastFix && hav(old.lat,old.lon,lastFix.lat,lastFix.lon) > 3) track = bearing(old.lat,old.lon,lastFix.lat,lastFix.lon);
+  else if (lastFix.hdg!=null) track = lastFix.hdg;
+  if (lastFix.alt!=null){ altHist.push([t,lastFix.alt]); altHist = altHist.filter(a => t - a[0] < 300000); }
   render();
 }
 function startGps(){
   if (gps || !('geolocation' in navigator)){ if(!('geolocation' in navigator)) $('msg').textContent='No GPS on this device/browser'; return; }
-  gps = navigator.geolocation.watchPosition(onFix, e => { $('msg').textContent = e.code===1 ? 'Location permission denied - allow it in settings' : 'No GPS fix yet'; },
+  gps = navigator.geolocation.watchPosition(onFix, e => { gpsErr = e.code===1 ? 'Location blocked - allow it in settings' : null; updateGpsInd(); },
     {enableHighAccuracy:true, maximumAge:5000, timeout:30000});
 }
 
@@ -135,30 +145,71 @@ async function pollLive(){
   }catch(e){ /* blocked, offline or not airborne: GPS/model carries on */ }
 }
 
-async function go(input){
-  const q = norm(input); if(!q) return;
-  $('msg').textContent = ''; landedAt = null; cruiseGs = null; live = null;
-  localStorage.setItem(LS.last, q); $('q').value = q;
-  await loadAirports();
-  route = null; dest = null; flight = null;
-  if (/^[A-Z]{3}$/.test(q) && ap(q)){ dest = ap(q); $('route').textContent = `Destination ${dest.code} · ${dest.city||dest.name}`; }
-  else {
-    flight = q;
-    const cached = routes()[q];
-    if (navigator.onLine){ try{ route = await lookupRoute(q); saveRoute(q, route); }catch(e){ route = cached || null; if(!cached) $('msg').textContent = `Couldn't find ${q} - type the destination airport code instead (e.g. IAH)`; } }
-    else route = cached || null;
-    if (!route && !$('msg').textContent) $('msg').textContent = `Offline and ${q} isn't cached - type the destination airport code (e.g. IAH)`;
-    if (route){
-      dest = ap(route.dest) || (route.destLat!=null ? {code:route.dest, lat:route.destLat, lon:route.destLon, tz:Intl.DateTimeFormat().resolvedOptions().timeZone, name:route.destName} : null);
-      $('route').textContent = `${route.airline ? route.airline+' · ' : ''}${route.origin} → ${route.dest}${dest&&dest.city ? ' ('+dest.city+')' : ''}${navigator.onLine?'':' · cached'}`;
-    }
-  }
-  if (dest){ startGps(); render(); pollLive(); }
+
+function bearing(a,b,c,d){ const y=Math.sin(toRad(d-b))*Math.cos(toRad(c)), x=Math.cos(toRad(a))*Math.sin(toRad(c))-Math.sin(toRad(a))*Math.cos(toRad(c))*Math.cos(toRad(d-b)); return (Math.atan2(y,x)*180/Math.PI+360)%360; }
+function angDiff(a,b){ const d=Math.abs(a-b)%360; return d>180?360-d:d; }
+function descending(){ if(altHist.length<3) return false; const a=altHist[0], b=altHist[altHist.length-1]; const dt=(b[0]-a[0])/60000; return dt>=1 && (a[1]-b[1])/dt > 150; } // > ~500 ft/min down
+
+function updateGpsInd(){
+  const el=$('gpsInd'), now=Date.now();
+  const fresh = lastFix && now-lastFix.t < 20000;
+  el.className = 'gps' + (gpsErr ? ' bad' : fresh ? ' ok' : '');
+  $('gpsTxt').textContent = gpsErr ? gpsErr : fresh ? `GPS locked · ±${Math.round(lastFix.acc)} m` : lastFix ? `GPS lost ${Math.round((now-lastFix.t)/1000)}s ago - reacquiring...` : 'Acquiring location...';
 }
 
-$('f').addEventListener('submit', e => { e.preventDefault(); go($('q').value); });
-setInterval(render, 5000);
+// Auto destination: home (TLV) unless the track clearly points elsewhere.
+function autoPick(){
+  if (mode!=='auto' || !airports) return;
+  const home = ap(HOME);
+  const setDest = (a, tag) => { if(!dest || dest.code!==a.code){ dest=a; cruiseGs=null; landedAt=null; } autoTag=tag; showDest(); };
+  if (!lastFix || track==null || !(gsEma>70)){ if(!dest || dest.code!==HOME) setDest(home, 'auto'); return; }
+  const dHome = hav(lastFix.lat,lastFix.lon,home.lat,home.lon);
+  const offHome = angDiff(track, bearing(lastFix.lat,lastFix.lon,home.lat,home.lon));
+  // Heading roughly home (routes wiggle and turn onto the approach), or already on final into TLV
+  if (offHome < 50 || dHome < 40){ setDest(home, 'auto'); return; }
+  const desc = descending();
+  let best=null, bestScore=1e9;
+  for (const [code,a] of Object.entries(airports)){
+    const big=a[5]===1; if(!big && !desc) continue;
+    const d=hav(lastFix.lat,lastFix.lon,a[0],a[1]); if(d<15 || d>9000) continue;
+    const off=angDiff(track, bearing(lastFix.lat,lastFix.lon,a[0],a[1]));
+    const cone = desc ? 60 : 20; if(off>cone) continue;
+    const xt = d*Math.sin(toRad(off)); // km off the current track
+    // descending: nearest well-aligned airport; cruising: well-aligned and far (you're not landing at a hub you're overflying at FL360)
+    const score = desc ? d*0.5 + xt*3 + (big?0:60) : xt*2 - Math.min(d,4000)*0.05;
+    if(score<bestScore){ bestScore=score; best=code; }
+  }
+  if (best) setDest(ap(best), desc ? 'auto · descending' : 'auto · guess');
+  else if(!dest) setDest(home, 'auto');
+}
+function showDest(){
+  if(!dest) return;
+  $('destCode').textContent = dest.code;
+  $('destTag').textContent = mode==='auto' ? autoTag : mode==='flight' ? flight : 'set';
+  if (mode!=='flight') $('route').textContent = `${dest.city||dest.name}${mode==='auto' && dest.code!==HOME ? ' - tap to change' : ''}`;
+}
+
+async function setTarget(input){
+  const q = norm(input);
+  $('msg').textContent=''; landedAt=null; cruiseGs=null; live=null; route=null; flight=null;
+  await loadAirports();
+  if (!q){ mode='auto'; localStorage.removeItem(LS.dest); dest=null; autoPick(); render(); return; }
+  if (/^[A-Z]{3}$/.test(q) && ap(q)){ mode='manual'; dest=ap(q); localStorage.setItem(LS.dest,q); showDest(); render(); return; }
+  // secondary path: flight number
+  flight=q; const cached=routes()[q];
+  if (navigator.onLine){ try{ route=await lookupRoute(q); saveRoute(q,route); }catch(e){ route=cached||null; } } else route=cached||null;
+  if (!route){ $('msg').textContent=`Couldn't resolve ${q}${navigator.onLine?'':' offline'} - type the airport code instead`; flight=null; return; }
+  mode='flight'; localStorage.setItem(LS.dest,q); localStorage.setItem(LS.last,q);
+  dest = ap(route.dest) || {code:route.dest, lat:route.destLat, lon:route.destLon, tz:Intl.DateTimeFormat().resolvedOptions().timeZone, name:route.destName};
+  showDest();
+  $('route').textContent = `${route.airline ? route.airline+' · ' : ''}${q} ${route.origin} → ${route.dest}`;
+  render(); pollLive();
+}
+
+$('destBtn').addEventListener('click', () => { const f=$('f'); f.hidden=!f.hidden; if(!f.hidden){ $('q').value=''; $('q').focus(); } });
+$('f').addEventListener('submit', e => { e.preventDefault(); $('f').hidden=true; setTarget($('q').value); });
+setInterval(render, 3000);
 setInterval(pollLive, 30000);
 window.addEventListener('online', pollLive);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-const last = localStorage.getItem(LS.last); if (last){ $('q').value = last; go(last); }
+(async () => { await loadAirports(); const saved=localStorage.getItem(LS.dest); startGps(); await setTarget(saved||''); })();
